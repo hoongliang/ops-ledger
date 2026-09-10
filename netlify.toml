@@ -1,0 +1,6 @@
+# Site files sit at the root of this folder; the function sits beside them.
+[build]
+  publish = "."
+
+[functions]
+  directory = "netlify/functions"

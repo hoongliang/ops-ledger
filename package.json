@@ -1,0 +1,8 @@
+{
+  "name": "ops-ledger",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Ops Ledger to-do tracker — static page plus a small serverless backend",
+  "type": "module",
+  "license": "UNLICENSED"
+}
