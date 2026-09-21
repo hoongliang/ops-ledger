@@ -27,6 +27,15 @@
     --general: #4E4A44;
     --general-soft: #E3DED2;
 
+    --custom-a: #6B4C9A;
+    --custom-a-soft: #E4DEEC;
+    --custom-b: #2C6E8F;
+    --custom-b-soft: #DCE7EC;
+    --custom-c: #8F5A2C;
+    --custom-c-soft: #ECE0D3;
+    --custom-d: #4C6B3A;
+    --custom-d-soft: #E1E7DC;
+
     --danger: #A23B2E;
     --accent: var(--hallaway-kl);
     --accent-soft: var(--hallaway-kl-soft);
@@ -114,6 +123,81 @@
     color: var(--ink-faint);
     font-weight: 400;
   }
+
+  .add-brand-btn {
+    margin-top: 10px;
+    background: transparent;
+    border: 1px dashed var(--line);
+    border-right: none;
+    border-radius: 6px 0 0 6px;
+    padding: 9px 8px;
+    text-align: left;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 12px;
+    color: var(--ink-soft);
+    cursor: pointer;
+  }
+
+  .add-brand-btn:hover { color: var(--ink); background: var(--paper-alt); }
+
+  .add-brand-form {
+    margin-top: 8px;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .add-brand-form input {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 12.5px;
+    padding: 7px 8px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    background: var(--paper);
+    color: var(--ink);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .add-brand-form-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .add-brand-form-actions button {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+
+  .add-brand-confirm {
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+  }
+
+  .add-brand-cancel {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+  }
+
+  .tab-remove {
+    position: absolute;
+    right: 6px;
+    top: 6px;
+    background: none;
+    border: none;
+    color: var(--ink-faint);
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 2px;
+  }
+
+  .tab-remove:hover { color: var(--danger); }
 
   /* Main panel */
   .panel {
@@ -424,17 +508,6 @@
 
   .completed-toggle:hover { color: var(--ink); }
 
-  .data-tools {
-    margin-top: 34px;
-    padding-top: 14px;
-    border-top: 1px solid var(--line);
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-
-  .data-tools .icon-btn { font-size: 11.5px; }
-
   /* Inline edit row */
   .edit-row {
     padding: 12px 4px;
@@ -487,6 +560,15 @@
 <div class="frame">
   <nav class="rail" id="rail">
     <div class="rail-title">Ops<br>Ledger</div>
+    <div id="railTabs" style="display:flex; flex-direction:column; gap:6px;"></div>
+    <button type="button" class="add-brand-btn" id="addBrandBtn">+ Add outlet</button>
+    <div class="add-brand-form" id="addBrandForm">
+      <input type="text" id="newBrandName" placeholder="Outlet name…">
+      <div class="add-brand-form-actions">
+        <button type="button" class="add-brand-confirm" id="confirmAddBrand">Add</button>
+        <button type="button" class="add-brand-cancel" id="cancelAddBrand">Cancel</button>
+      </div>
+    </div>
   </nav>
   <main class="panel">
     <div class="panel-head">
@@ -525,12 +607,6 @@
     <div class="list" id="taskList"></div>
     <div id="emptyState"></div>
     <button class="completed-toggle" id="completedToggle" style="display:none;"></button>
-
-    <div class="data-tools">
-      <button type="button" class="icon-btn" id="exportBtn">Download a copy</button>
-      <button type="button" class="icon-btn" id="importBtn">Restore from a file</button>
-      <input type="file" id="importFile" accept="application/json,.json" hidden>
-    </div>
   </main>
 </div>
 
@@ -543,26 +619,13 @@ const BRANDS = [
   { id: 'general', name: 'General', en: 'Group-level', sub: 'Group-level & cross-brand', accent: '--general', accentSoft: '--general-soft' },
 ];
 
-// Data lives in Netlify Blobs, read and written through this function.
-const API = '/api/tasks';   // Vercel serves this directly; on Netlify _redirects maps it to the function
-const BRAND_KEYS = BRANDS.map(b => b.id);
-
-function emptyData() {
-  const base = { names: [] };
-  BRAND_KEYS.forEach(k => base[k] = []);
-  return base;
-}
-
-let data = emptyData();
-let rev = 0;                 // version the server last confirmed
-let pending = [];            // edits made locally but not yet saved
-let pushing = false;
-let retryTimer = null;
+const DATA_ENDPOINT = '/.netlify/functions/tasks';
+let data = { hallawaykl: [], hallawaypj: [], nongfu: [], oho: [], general: [], names: [] };
+let currentRev = 0; // optimistic-concurrency counter the backend expects back on every save
 let activeBrand = 'hallawaykl';
 let showCompleted = false;
 let editingId = null;
 
-const rail = document.getElementById('rail');
 const taskList = document.getElementById('taskList');
 const emptyState = document.getElementById('emptyState');
 const panelTitle = document.getElementById('panelTitle');
@@ -576,13 +639,67 @@ const newNameInput = document.getElementById('newNameInput');
 const addNameBtn = document.getElementById('addNameBtn');
 const nameChipList = document.getElementById('nameChipList');
 const syncStatus = document.getElementById('syncStatus');
+const addBrandBtn = document.getElementById('addBrandBtn');
+const addBrandForm = document.getElementById('addBrandForm');
+const newBrandName = document.getElementById('newBrandName');
+const confirmAddBrand = document.getElementById('confirmAddBrand');
+const cancelAddBrand = document.getElementById('cancelAddBrand');
+
+// The tasks.mjs backend only persists the fixed brand keys (hallawaykl,
+// hallawaypj, nongfu, oho, general) + names — it has no field for custom
+// brands, so anything added here would silently disappear on the next save.
+// Hiding the trigger rather than shipping a control that eats data.
+addBrandBtn.style.display = 'none';
+
+function slugify(name) {
+  let base = name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-').replace(/(^-|-$)/g, '');
+  if (!base) base = 'outlet';
+  let id = base;
+  let n = 1;
+  const existing = new Set(getAllBrands().map(b => b.id));
+  while (existing.has(id)) {
+    id = `${base}-${n}`;
+    n++;
+  }
+  return id;
+}
+
+addBrandBtn.addEventListener('click', () => {
+  addBrandForm.style.display = 'flex';
+  addBrandBtn.style.display = 'none';
+  newBrandName.focus();
+});
+
+function closeAddBrandForm() {
+  addBrandForm.style.display = 'none';
+  addBrandBtn.style.display = 'block';
+  newBrandName.value = '';
+}
+
+cancelAddBrand.addEventListener('click', closeAddBrandForm);
+
+confirmAddBrand.addEventListener('click', () => {
+  const name = newBrandName.value.trim();
+  if (!name) { newBrandName.focus(); return; }
+  const id = slugify(name);
+  if (!data.customBrands) data.customBrands = [];
+  data.customBrands.push({ id, name });
+  data[id] = [];
+  activeBrand = id;
+  showCompleted = false;
+  editingId = null;
+  saveData();
+  closeAddBrandForm();
+  render();
+});
+
+newBrandName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmAddBrand.click(); }
+  if (e.key === 'Escape') { closeAddBrandForm(); }
+});
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-function setSyncMessage(text) {
-  syncStatus.textContent = text;
 }
 
 function updateSyncStatus(label) {
@@ -614,7 +731,8 @@ function renderNameChips() {
     const removeBtn = document.createElement('button');
     removeBtn.textContent = '×';
     removeBtn.addEventListener('click', () => {
-      commit(d => { d.names = (d.names || []).filter(n => n !== name); });
+      data.names = data.names.filter(n => n !== name);
+      saveData();
       renderNameChips();
       populateAssigneeSelect(taskAssignee, '');
     });
@@ -637,11 +755,10 @@ manageNamesToggle.addEventListener('click', () => {
 addNameBtn.addEventListener('click', () => {
   const name = newNameInput.value.trim();
   if (!name) return;
-  if (!(data.names || []).includes(name)) {
-    commit(d => {
-      if (!d.names) d.names = [];
-      if (!d.names.includes(name)) d.names.push(name);
-    });
+  if (!data.names) data.names = [];
+  if (!data.names.includes(name)) {
+    data.names.push(name);
+    saveData();
     renderNameChips();
     populateAssigneeSelect(taskAssignee, '');
   }
@@ -653,108 +770,94 @@ newNameInput.addEventListener('keydown', (e) => {
 });
 
 async function loadData() {
-  setSyncMessage('Loading…');
   try {
-    const res = await fetch(API, { cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const server = await res.json();
-    data = Object.assign(emptyData(), server.data || {});
-    rev = server.rev || 0;
-    updateSyncStatus('Synced');
+    const res = await fetch(DATA_ENDPOINT);
+    if (res.ok) {
+      const record = await res.json();
+      currentRev = typeof record.rev === 'number' ? record.rev : 0;
+      data = Object.assign(
+        { hallawaykl: [], hallawaypj: [], nongfu: [], oho: [], general: [], names: [] },
+        record.data || {}
+      );
+    } else {
+      console.error('Load failed with status', res.status);
+      syncStatus.textContent = 'Load failed';
+    }
   } catch (e) {
     console.error('Could not load tasks:', e);
-    setSyncMessage('Can’t reach the server — nothing loaded');
+    syncStatus.textContent = 'Load failed';
   }
   render();
   populateAssigneeSelect(taskAssignee, '');
+  updateSyncStatus('Synced');
 }
 
-// Every change goes through commit(). The mutator is applied to the local
-// copy straight away, then saved. If someone else saved first the server
-// returns 409 with their version, and the same mutator is replayed on top
-// of it — so concurrent edits merge instead of overwriting each other.
-function commit(mutator) {
-  mutator(data);
-  pending.push(mutator);
-  render();
-  push();
-}
-
-async function push() {
-  if (pushing || pending.length === 0) return;
-  pushing = true;
-  clearTimeout(retryTimer);
-  let conflicts = 0;
-
+async function saveData() {
+  const payload = {
+    rev: currentRev,
+    data: {
+      hallawaykl: data.hallawaykl || [],
+      hallawaypj: data.hallawaypj || [],
+      nongfu: data.nongfu || [],
+      oho: data.oho || [],
+      general: data.general || [],
+      names: data.names || [],
+    },
+  };
   try {
-    while (pending.length) {
-      const batch = pending.length;
-      setSyncMessage('Saving…');
-      const res = await fetch(API, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rev, data }),
-      });
+    const res = await fetch(DATA_ENDPOINT, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-      if (res.status === 409) {
-        const server = await res.json();
-        data = Object.assign(emptyData(), server.data || {});
-        rev = server.rev || 0;
-        pending.forEach(m => m(data));   // replay unsaved edits on their version
-        render();
-        populateAssigneeSelect(taskAssignee, taskAssignee.value);
-        if (++conflicts > 5) throw new Error('Too many conflicting saves');
-        continue;
-      }
-
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-
-      const saved = await res.json();
-      rev = saved.rev;
-      pending = pending.slice(batch);
-      updateSyncStatus('Saved');
+    if (res.status === 409) {
+      // Someone/something else saved since we last loaded. Adopt the
+      // server's current version rather than clobbering it, and let the
+      // person know their very last change may need redoing.
+      const conflict = await res.json();
+      currentRev = conflict.rev;
+      data = Object.assign(
+        { hallawaykl: [], hallawaypj: [], nongfu: [], oho: [], general: [], names: [] },
+        conflict.data || {}
+      );
+      render();
+      syncStatus.textContent = 'Synced elsewhere — reloaded latest, please redo your last change';
+      return;
     }
-    pushing = false;
+
+    if (!res.ok) throw new Error(`Save failed with status ${res.status}`);
+    const next = await res.json();
+    currentRev = next.rev;
+    updateSyncStatus('Synced');
   } catch (e) {
     console.error('Could not save tasks:', e);
-    setSyncMessage('Not saved — retrying');
-    pushing = false;
-    retryTimer = setTimeout(push, 5000);
+    syncStatus.textContent = 'Sync failed';
   }
 }
 
-// Pick up edits made in another browser or by a colleague.
-async function refreshFromServer() {
-  if (pushing || pending.length || editingId || document.hidden) return;
-  try {
-    const res = await fetch(API, { cache: 'no-store' });
-    if (!res.ok) return;
-    const server = await res.json();
-    if ((server.rev || 0) === rev) return;
-    data = Object.assign(emptyData(), server.data || {});
-    rev = server.rev || 0;
-    render();
-    populateAssigneeSelect(taskAssignee, taskAssignee.value);
-    updateSyncStatus('Updated');
-  } catch (e) {
-    // offline; the next tick will try again
-  }
+const CUSTOM_ACCENTS = [
+  ['--custom-a', '--custom-a-soft'],
+  ['--custom-b', '--custom-b-soft'],
+  ['--custom-c', '--custom-c-soft'],
+  ['--custom-d', '--custom-d-soft'],
+];
+
+function getAllBrands() {
+  const custom = (data.customBrands || []).map((cb, i) => {
+    const [accent, accentSoft] = CUSTOM_ACCENTS[i % CUSTOM_ACCENTS.length];
+    return { id: cb.id, name: cb.name, en: 'Outlet', sub: cb.name, accent, accentSoft, custom: true };
+  });
+  return BRANDS.concat(custom);
 }
 
-setInterval(refreshFromServer, 20000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshFromServer(); });
-window.addEventListener('beforeunload', (e) => {
-  if (pending.length) { e.preventDefault(); e.returnValue = ''; }
-});
-
-function findTask(store, brand, id) {
-  return (store[brand] || []).find(t => t.id === id);
-}
-
-function buildRail() {
-  BRANDS.forEach(b => {
+function renderRail() {
+  const railTabs = document.getElementById('railTabs');
+  railTabs.innerHTML = '';
+  getAllBrands().forEach(b => {
     const btn = document.createElement('button');
     btn.className = 'tab' + (b.id === activeBrand ? ' active' : '');
+    btn.style.position = 'relative';
     btn.dataset.brand = b.id;
     const openCount = (data[b.id] || []).filter(t => !t.done).length;
     btn.innerHTML = `${b.name}<span class="tab-en">${b.en}</span><span class="count"> · ${openCount}</span>`;
@@ -764,16 +867,23 @@ function buildRail() {
       editingId = null;
       render();
     });
-    rail.appendChild(btn);
-  });
-}
-
-function refreshRailState() {
-  document.querySelectorAll('.tab').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.brand === activeBrand);
-    const openCount = (data[btn.dataset.brand] || []).filter(t => !t.done).length;
-    const b = BRANDS.find(x => x.id === btn.dataset.brand);
-    btn.innerHTML = `${b.name}<span class="tab-en">${b.en}</span><span class="count"> · ${openCount}</span>`;
+    if (b.custom) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'tab-remove';
+      removeBtn.textContent = '×';
+      removeBtn.title = `Remove ${b.name}`;
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove "${b.name}"? Its tasks will be deleted too.`)) return;
+        data.customBrands = data.customBrands.filter(cb => cb.id !== b.id);
+        delete data[b.id];
+        if (activeBrand === b.id) activeBrand = 'hallawaykl';
+        saveData();
+        render();
+      });
+      btn.appendChild(removeBtn);
+    }
+    railTabs.appendChild(btn);
   });
 }
 
@@ -937,20 +1047,14 @@ function renderEditRow(task) {
   saveBtn.addEventListener('click', () => {
     const text = textInput.value.trim();
     if (!text) { textInput.focus(); return; }
-    const id = task.id;
-    const brand = activeBrand;
-    const changes = {
-      text,
-      priority: prioritySelect.value,
-      dueDate: dateInput.value || null,
-      assignee: assigneeSelect.value || null,
-      notes: notesInput.value.trim(),
-    };
+    task.text = text;
+    task.priority = prioritySelect.value;
+    task.dueDate = dateInput.value || null;
+    task.assignee = assigneeSelect.value || null;
+    task.notes = notesInput.value.trim();
     editingId = null;
-    commit(d => {
-      const t = findTask(d, brand, id);
-      if (t) Object.assign(t, changes);
-    });
+    saveData();
+    render();
   });
 
   const cancelBtn = document.createElement('button');
@@ -966,7 +1070,7 @@ function renderEditRow(task) {
 }
 
 function render() {
-  const brand = BRANDS.find(b => b.id === activeBrand);
+  const brand = getAllBrands().find(b => b.id === activeBrand);
   document.documentElement.style.setProperty('--accent', `var(${brand.accent})`);
   document.documentElement.style.setProperty('--accent-soft', `var(${brand.accentSoft})`);
   panelTitle.textContent = brand.name;
@@ -1006,28 +1110,23 @@ function render() {
     completedToggle.style.display = 'none';
   }
 
-  if (document.querySelectorAll('.tab').length === 0) {
-    buildRail();
-  } else {
-    refreshRailState();
-  }
+  renderRail();
 }
 
 function toggleDone(id) {
-  const brand = activeBrand;
-  const current = findTask(data, brand, id);
-  if (!current) return;
-  const done = !current.done;                    // absolute, so replays stay correct
-  const completedAt = done ? new Date().toISOString() : null;
-  commit(d => {
-    const t = findTask(d, brand, id);
-    if (t) { t.done = done; t.completedAt = completedAt; }
-  });
+  const tasks = data[activeBrand];
+  const t = tasks.find(x => x.id === id);
+  if (!t) return;
+  t.done = !t.done;
+  t.completedAt = t.done ? new Date().toISOString() : null;
+  saveData();
+  render();
 }
 
 function deleteTask(id) {
-  const brand = activeBrand;
-  commit(d => { d[brand] = (d[brand] || []).filter(x => x.id !== id); });
+  data[activeBrand] = data[activeBrand].filter(x => x.id !== id);
+  saveData();
+  render();
 }
 
 function addTask() {
@@ -1054,11 +1153,9 @@ function addTask() {
     createdAt: new Date().toISOString(),
   };
 
-  const brand = activeBrand;
-  commit(d => {
-    if (!d[brand]) d[brand] = [];
-    if (!d[brand].some(t => t.id === task.id)) d[brand].push(task);
-  });
+  data[activeBrand].push(task);
+  saveData();
+  render();
 
   textInput.value = '';
   priorityInput.value = 'medium';
@@ -1079,53 +1176,6 @@ document.getElementById('taskText').addEventListener('keydown', (e) => {
 completedToggle.addEventListener('click', () => {
   showCompleted = !showCompleted;
   render();
-});
-
-// Download a copy: a plain JSON file of everything, for safekeeping.
-document.getElementById('exportBtn').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `ops-ledger-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
-
-// Restore from a file: also how you bring across data from the old
-// version of this tracker.
-document.getElementById('importBtn').addEventListener('click', () => {
-  document.getElementById('importFile').click();
-});
-
-document.getElementById('importFile').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  e.target.value = '';
-  try {
-    const raw = JSON.parse(await file.text());
-    const incoming = raw && raw.data && !Array.isArray(raw.data) ? raw.data : raw;
-    if (!incoming || typeof incoming !== 'object') throw new Error('Not a tracker file');
-
-    // Older files kept one combined "hallaway" list, before the KL/PJ split.
-    const merged = emptyData();
-    BRAND_KEYS.forEach(k => { if (Array.isArray(incoming[k])) merged[k] = incoming[k]; });
-    if (Array.isArray(incoming.hallaway)) merged.hallawaykl = merged.hallawaykl.concat(incoming.hallaway);
-    if (Array.isArray(incoming.names)) merged.names = incoming.names;
-
-    const count = BRAND_KEYS.reduce((n, k) => n + merged[k].length, 0);
-    if (!confirm(`Replace everything on this site with ${count} task(s) from ${file.name}?`)) return;
-
-    editingId = null;
-    commit(d => {
-      BRAND_KEYS.forEach(k => d[k] = merged[k]);
-      d.names = merged.names;
-    });
-    populateAssigneeSelect(taskAssignee, '');
-  } catch (err) {
-    console.error(err);
-    setSyncMessage('That file couldn’t be read');
-  }
 });
 
 loadData();
